@@ -1,0 +1,8 @@
+anthropic
+google-auth
+google-auth-httplib2
+google-api-python-client
+requests
+notion-client
+slack-sdk
+python-dotenv
