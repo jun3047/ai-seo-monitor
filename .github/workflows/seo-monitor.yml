@@ -1,0 +1,55 @@
+name: SEO Weekly Monitor
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'  # UTC 01:00 = KST 10:00, 매주 월요일
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip Notion/Slack updates)'
+        required: false
+        default: 'false'
+
+jobs:
+  seo-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SiteOne CLI
+        run: |
+          curl -1sLf \
+            'https://dl.cloudsmith.io/public/janreges/siteone-crawler/setup.deb.sh' \
+            | sudo -E bash
+          sudo apt-get install -y siteone-crawler
+
+      - name: Run SiteOne Crawler
+        run: |
+          chmod +x scripts/crawl_siteone.sh
+          bash scripts/crawl_siteone.sh
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run SEO Monitor
+        run: python scripts/main.py
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_ISSUE_DB_ID: ${{ secrets.NOTION_ISSUE_DB_ID }}
+          NOTION_REPORT_DB_ID: ${{ secrets.NOTION_REPORT_DB_ID }}
+          NOTION_WATCH_DB_ID: ${{ secrets.NOTION_WATCH_DB_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
