@@ -12,7 +12,7 @@ echo "Starting SiteOne crawl for: $SITE_URL"
 
 siteone-crawler \
   --url="$SITE_URL" \
-  --output-type=json \
+  --output=json \
   --output-json-file=./tmp/siteone-report.json \
   --max-reqs-per-sec=10 \
   --workers=3

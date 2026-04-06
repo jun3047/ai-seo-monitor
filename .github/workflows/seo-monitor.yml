@@ -53,4 +53,5 @@ jobs:
           NOTION_REPORT_DB_ID: ${{ secrets.NOTION_REPORT_DB_ID }}
           NOTION_WATCH_DB_ID: ${{ secrets.NOTION_WATCH_DB_ID }}
           SITE_NAME: ${{ secrets.SITE_NAME }}
+          SLACK_MENTION: ${{ secrets.SLACK_MENTION }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
