@@ -146,7 +146,7 @@ def send_slack_report(
     # Step 1: 메인 메시지
     main_response = client.chat_postMessage(
         channel=channel,
-        text=f"[주간 타임스프레드 SEO 확인] {today_str}",
+        text=f"[주간 {os.environ.get('SITE_NAME', 'SEO')} SEO 확인] {today_str}",
     )
     thread_ts = main_response["ts"]
 

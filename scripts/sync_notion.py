@@ -123,6 +123,120 @@ def sync_issues(client: Client, issue_db_id: str, analysis: dict, today: str) ->
             _rate_limit_sleep()
 
 
+def _text_block(block_type: str, content: str, **kwargs):
+    """Notion 텍스트 블록 생성 헬퍼."""
+    rich_text = [{"type": "text", "text": {"content": content[:2000]}}]
+    if kwargs.get("bold"):
+        rich_text[0]["annotations"] = {"bold": True}
+    return {"object": "block", "type": block_type, block_type: {"rich_text": rich_text}}
+
+
+def _heading2(content: str):
+    return _text_block("heading_2", content)
+
+
+def _heading3(content: str):
+    return _text_block("heading_3", content)
+
+
+def _paragraph(content: str):
+    return _text_block("paragraph", content)
+
+
+def _bulleted(content: str):
+    return _text_block("bulleted_list_item", content)
+
+
+def _divider():
+    return {"object": "block", "type": "divider", "divider": {}}
+
+
+def _build_report_body(analysis: dict, gsc_data: dict, siteone_data: dict) -> list:
+    """주간 리포트 본문 블록 생성."""
+    blocks: list[dict] = []
+
+    # 1. 요약
+    summary = analysis.get("summary", "")
+    if summary:
+        blocks.append(_heading2("📋 전체 요약"))
+        blocks.append(_paragraph(summary))
+        blocks.append(_divider())
+
+    # 2. CWV 지표
+    cwv = gsc_data.get("cwv", {})
+    lcp = cwv.get("lcp", {})
+    inp = cwv.get("inp", {})
+    cls_ = cwv.get("cls", {})
+    blocks.append(_heading2("📊 Core Web Vitals"))
+    blocks.append(_bulleted(f"LCP Good: {lcp.get('good_pct', 'N/A')}% | NI: {lcp.get('needs_improvement_pct', 'N/A')}% | Poor: {lcp.get('poor_pct', 'N/A')}%"))
+    blocks.append(_bulleted(f"INP Good: {inp.get('good_pct', 'N/A')}% | NI: {inp.get('needs_improvement_pct', 'N/A')}% | Poor: {inp.get('poor_pct', 'N/A')}%"))
+    blocks.append(_bulleted(f"CLS Good: {cls_.get('good_pct', 'N/A')}% | NI: {cls_.get('needs_improvement_pct', 'N/A')}% | Poor: {cls_.get('poor_pct', 'N/A')}%"))
+    blocks.append(_bulleted(f"색인 수: {gsc_data.get('indexed_count', 0)} | 색인 오류: {len(gsc_data.get('index_errors', []))}"))
+    blocks.append(_divider())
+
+    # 3. 지표 코멘트
+    metric_comments = analysis.get("metric_comments", [])
+    if metric_comments:
+        blocks.append(_heading2("📈 지표 변화 코멘트"))
+        for mc in metric_comments:
+            blocks.append(_bulleted(f"[{mc.get('metric', '')}] {mc.get('comment', '')}"))
+        blocks.append(_divider())
+
+    # 4. 신규 이슈
+    new_issues = analysis.get("new_issues", [])
+    if new_issues:
+        blocks.append(_heading2(f"🆕 신규 이슈 ({len(new_issues)}건)"))
+        for issue in new_issues:
+            severity = issue.get("severity", "Info")
+            blocks.append(_heading3(f"[{severity}] {issue.get('type', '')}"))
+            if issue.get("url"):
+                blocks.append(_bulleted(f"URL: {issue['url']}"))
+            blocks.append(_bulleted(f"설명: {issue.get('description', '')}"))
+            blocks.append(_bulleted(f"근거: {issue.get('reason', '')}"))
+            blocks.append(_bulleted(f"조치: {issue.get('action', '')}"))
+        blocks.append(_divider())
+
+    # 5. 재발 이슈
+    recurred = analysis.get("recurred_issues", [])
+    if recurred:
+        blocks.append(_heading2(f"🔄 재발 이슈 ({len(recurred)}건)"))
+        for issue in recurred:
+            severity = issue.get("severity", "Info")
+            blocks.append(_heading3(f"[{severity}] {issue.get('type', '')}"))
+            if issue.get("url"):
+                blocks.append(_bulleted(f"URL: {issue['url']}"))
+            blocks.append(_bulleted(f"설명: {issue.get('description', '')}"))
+            if issue.get("action"):
+                blocks.append(_bulleted(f"조치: {issue['action']}"))
+        blocks.append(_divider())
+
+    # 6. 해소 이슈
+    resolved = analysis.get("resolved_issues", [])
+    if resolved:
+        blocks.append(_heading2(f"✅ 해소 이슈 ({len(resolved)}건)"))
+        for issue in resolved:
+            blocks.append(_bulleted(f"{issue.get('type', '')}: {issue.get('description', '')}"))
+        blocks.append(_divider())
+
+    # 7. 관찰 항목 업데이트
+    watch_updates = analysis.get("watch_updates", [])
+    if watch_updates:
+        blocks.append(_heading2("👀 관찰 항목 변화"))
+        for wu in watch_updates:
+            blocks.append(_bulleted(f"[{wu.get('type', '')}] {wu.get('change', '')}"))
+            if wu.get("comment"):
+                blocks.append(_paragraph(f"  → {wu['comment']}"))
+        blocks.append(_divider())
+
+    # 8. 생략 이슈
+    skipped = analysis.get("skipped_count", 0)
+    if skipped:
+        blocks.append(_paragraph(f"⏭️ 진행 중인 미해소 이슈 {skipped}건은 생략되었습니다."))
+
+    # Notion API 제한: 한 번에 최대 100개 블록
+    return blocks[:100]
+
+
 def create_weekly_report(
     client: Client,
     report_db_id: str,
@@ -139,10 +253,13 @@ def create_weekly_report(
     all_response_times = [p.get("response_time", 0) for p in slow_pages if p.get("response_time")]
     avg_response = round(sum(all_response_times) / len(all_response_times), 2) if all_response_times else 0
 
+    # 본문 블록 생성
+    children = _build_report_body(analysis, gsc_data, siteone_data)
+
     page = client.pages.create(
         parent={"database_id": report_db_id},
         properties={
-            "리포트": {"title": [{"text": {"content": f"주간 SEO 리포트 | {today}"}}]},
+            "리포트": {"title": [{"text": {"content": f"주간 {os.environ.get('SITE_NAME', 'SEO')} 리포트 | {today}"}}]},
             "리포트 날짜": {"date": {"start": today}},
             "Claude 요약": {"rich_text": [{"text": {"content": analysis.get("summary", "")[:2000]}}]},
             "신규 이슈 수": {"number": len(analysis.get("new_issues", []))},
@@ -157,6 +274,7 @@ def create_weekly_report(
             "평균 응답시간": {"number": avg_response},
             "Notion 이슈 링크": {"url": f"https://www.notion.so/{report_db_id.replace('-', '')}"},
         },
+        children=children,
     )
 
     page_url = page.get("url", "")
