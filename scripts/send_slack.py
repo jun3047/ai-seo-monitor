@@ -1,5 +1,6 @@
 """Slack 스레드 발송 모듈."""
 
+import math
 import os
 from datetime import date
 
@@ -141,12 +142,20 @@ def send_slack_report(
     """Slack 메인 메시지 + 스레드 상세 리포트 발송."""
     client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
     channel = os.environ["SLACK_CHANNEL_ID"]
-    today_str = date.today().isoformat()
+    today = date.today()
+    site_name = os.environ.get("SITE_NAME", "SEO")
+    mention = os.environ.get("SLACK_MENTION", "")
+
+    # 월의 N주차 계산
+    week_of_month = math.ceil(today.day / 7)
+    title = f"*[{today.year}년 {today.month}월 {week_of_month}주차] {site_name} SEO 모니터링*"
+    if mention:
+        title = f"{mention}\n{title}"
 
     # Step 1: 메인 메시지
     main_response = client.chat_postMessage(
         channel=channel,
-        text=f"[주간 타임스프레드 SEO 확인] {today_str}",
+        text=title,
     )
     thread_ts = main_response["ts"]
 
