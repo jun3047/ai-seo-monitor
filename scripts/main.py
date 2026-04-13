@@ -9,125 +9,129 @@ from datetime import date, datetime
 
 
 def parse_siteone_json(filepath: str) -> dict:
-    """SiteOne 크롤링 JSON 결과 파싱."""
+    """SiteOne 크롤링 JSON 결과 파싱.
+
+    SiteOne JSON 구조:
+    - results[]: URL별 기본 정보 (url, status, size, elapsedTime)
+    - tables.best-practices[]: SEO 분석 집계 (analysisName별 ok/warning/critical 카운트)
+    - tables.accessibility[]: 접근성 분석 집계
+    - tables.404[]: 404 에러 URL 목록 (url, sourceUqId, statusCode)
+    - tables.content-types[]: 콘텐츠 유형별 HTTP 상태 집계
+    - summary.items[]: 전체 요약 (aplCode, status, text)
+    - qualityScores: 카테고리별 점수 (seo, security, accessibility, etc.)
+    """
     with open(filepath) as f:
         raw = json.load(f)
 
     result = {
+        "total_urls": 0,
         "error_urls": [],
         "redirect_issues": [],
-        "title_issues": [],
-        "meta_issues": [],
-        "h1_issues": [],
-        "canonical_issues": [],
-        "missing_alt": [],
         "slow_pages": [],
-        "robots_issues": [],
+        "seo_issues": [],
+        "accessibility_issues": [],
+        "best_practice_issues": [],
+        "not_found_urls": [],
+        "summary_issues": [],
+        "quality_scores": {},
     }
 
-    # SiteOne JSON 구조에 맞게 방어적 파싱
-    # 실제 출력 확인 후 필드명 조정 필요
-    pages = raw if isinstance(raw, list) else raw.get("urls", raw.get("pages", raw.get("results", [])))
-    if not isinstance(pages, list):
-        print("Warning: Unexpected SiteOne JSON structure, attempting flat parse")
-        pages = []
+    # --- 1. results[]: URL별 기본 정보 ---
+    results = raw.get("results", [])
+    if isinstance(results, list):
+        result["total_urls"] = len(results)
 
-    seen_titles = {}
-    seen_metas = {}
-    seen_h1s = {}
+        for entry in results:
+            url = entry.get("url", "")
+            status = entry.get("status", "200")
+            elapsed = entry.get("elapsedTime", 0)
 
-    for entry in pages:
-        url = entry.get("url", entry.get("finalUrl", ""))
-        status = entry.get("statusCode", entry.get("status_code", entry.get("status", 200)))
+            # status가 문자열일 수 있음
+            status_int = int(status) if str(status).isdigit() else 200
 
-        # 4xx/5xx 에러
-        if isinstance(status, int) and 400 <= status < 600:
-            result["error_urls"].append({"url": url, "status": status})
+            # 4xx/5xx 에러
+            if 400 <= status_int < 600:
+                result["error_urls"].append({"url": url, "status": status_int})
 
-        # 리다이렉트 체인/루프
-        redirect_count = entry.get("redirects", entry.get("redirectCount", 0))
-        if isinstance(redirect_count, int) and redirect_count > 1:
-            result["redirect_issues"].append({
-                "url": url,
-                "redirect_count": redirect_count,
-            })
-        if entry.get("isRedirectLoop", False):
-            result["redirect_issues"].append({
-                "url": url,
-                "type": "redirect_loop",
-            })
+            # 3xx 리다이렉트
+            if 300 <= status_int < 400:
+                result["redirect_issues"].append({"url": url, "status": status_int})
 
-        # title 누락/중복
-        title = entry.get("title", entry.get("pageTitle", ""))
-        if not title:
-            result["title_issues"].append({"url": url, "issue": "missing"})
-        else:
-            seen_titles.setdefault(title, []).append(url)
+            # 느린 페이지 (1초 초과)
+            if isinstance(elapsed, (int, float)) and elapsed > 1.0:
+                result["slow_pages"].append({
+                    "url": url,
+                    "response_time_sec": round(elapsed, 3),
+                })
 
-        # meta description 누락/중복
-        meta = entry.get("description", entry.get("metaDescription", ""))
-        if not meta:
-            result["meta_issues"].append({"url": url, "issue": "missing"})
-        else:
-            seen_metas.setdefault(meta, []).append(url)
-
-        # H1 누락/중복
-        h1 = entry.get("h1", entry.get("headings", {}).get("h1", ""))
-        h1_text = h1 if isinstance(h1, str) else (h1[0] if isinstance(h1, list) and h1 else "")
-        if not h1_text:
-            result["h1_issues"].append({"url": url, "issue": "missing"})
-        else:
-            seen_h1s.setdefault(h1_text, []).append(url)
-
-        # canonical 이슈
-        canonical = entry.get("canonical", entry.get("canonicalUrl", ""))
-        if canonical and canonical != url:
-            result["canonical_issues"].append({
-                "url": url,
-                "canonical": canonical,
-            })
-
-        # 이미지 alt 누락
-        missing_alt_count = entry.get("imagesWithoutAlt", entry.get("missingAltCount", 0))
-        if isinstance(missing_alt_count, int) and missing_alt_count > 0:
-            result["missing_alt"].append({
-                "url": url,
-                "count": missing_alt_count,
-            })
-
-        # 응답시간
-        response_time = entry.get("responseTime", entry.get("loadTime", entry.get("time", 0)))
-        if isinstance(response_time, (int, float)) and response_time > 0:
-            result["slow_pages"].append({
-                "url": url,
-                "response_time": response_time,
-            })
-
-        # robots/noindex
-        noindex = entry.get("noindex", entry.get("isNoindex", False))
-        robots_blocked = entry.get("robotsBlocked", entry.get("isBlockedByRobotsTxt", False))
-        if noindex:
-            result["robots_issues"].append({"url": url, "type": "noindex"})
-        if robots_blocked:
-            result["robots_issues"].append({"url": url, "type": "robots_blocked"})
-
-    # 중복 title/meta/H1 추가
-    for title, urls in seen_titles.items():
-        if len(urls) > 1:
-            result["title_issues"].append({"urls": urls, "issue": "duplicate", "value": title})
-    for meta, urls in seen_metas.items():
-        if len(urls) > 1:
-            result["meta_issues"].append({"urls": urls, "issue": "duplicate", "value": meta})
-    for h1, urls in seen_h1s.items():
-        if len(urls) > 1:
-            result["h1_issues"].append({"urls": urls, "issue": "duplicate", "value": h1})
-
-    # 느린 페이지 TOP 5 (1s 초과만, 응답시간 내림차순)
+    # 느린 페이지 TOP 5
     result["slow_pages"] = sorted(
-        [p for p in result["slow_pages"] if p["response_time"] > 1000],
-        key=lambda x: x["response_time"],
+        result["slow_pages"],
+        key=lambda x: x["response_time_sec"],
         reverse=True,
     )[:5]
+
+    # --- 2. tables ---
+    tables = raw.get("tables", {})
+
+    # tables.best-practices: SEO/구조 이슈 집계
+    for row in tables.get("best-practices", []):
+        name = row.get("analysisName", "")
+        warning = int(row.get("warning", 0))
+        critical = int(row.get("critical", 0))
+        if warning > 0 or critical > 0:
+            result["best_practice_issues"].append({
+                "name": name,
+                "warning": warning,
+                "critical": critical,
+                "ok": int(row.get("ok", 0)),
+            })
+
+    # tables.accessibility: 접근성 이슈 집계
+    for row in tables.get("accessibility", []):
+        name = row.get("analysisName", "")
+        warning = int(row.get("warning", 0))
+        critical = int(row.get("critical", 0))
+        if warning > 0 or critical > 0:
+            result["accessibility_issues"].append({
+                "name": name,
+                "warning": warning,
+                "critical": critical,
+                "ok": int(row.get("ok", 0)),
+            })
+
+    # tables.404: 깨진 링크
+    for row in tables.get("404", []):
+        result["not_found_urls"].append({
+            "url": row.get("url", ""),
+            "source": row.get("sourceUqId", ""),
+            "status": row.get("statusCode", "404"),
+        })
+
+    # --- 3. summary.items[]: 전체 요약 ---
+    summary = raw.get("summary", {})
+    for item in summary.get("items", []):
+        status = item.get("status", "")
+        if status in ("CRITICAL", "WARNING"):
+            result["summary_issues"].append({
+                "code": item.get("aplCode", ""),
+                "status": status,
+                "text": item.get("text", ""),
+            })
+
+    # --- 4. qualityScores ---
+    quality = raw.get("qualityScores", {})
+    if quality:
+        result["quality_scores"] = {
+            "overall": quality.get("overall", None),
+        }
+        for cat in quality.get("categories", []):
+            code = cat.get("code", "")
+            if code:
+                result["quality_scores"][code] = {
+                    "score": cat.get("score"),
+                    "label": cat.get("label", ""),
+                }
 
     return result
 
@@ -192,9 +196,14 @@ def main():
     with _step_timer("step1_siteone_parse", debug_log):
         try:
             siteone_data = parse_siteone_json(siteone_path)
-            issue_count = sum(len(v) for v in siteone_data.values() if isinstance(v, list))
-            debug_log["steps"]["step1_siteone_parse"]["issues_found"] = issue_count
-            print(f"  SiteOne parsed: {issue_count} issues found")
+            total_urls = siteone_data.get("total_urls", 0)
+            bp_issues = len(siteone_data.get("best_practice_issues", []))
+            a11y_issues = len(siteone_data.get("accessibility_issues", []))
+            summary_issues = len(siteone_data.get("summary_issues", []))
+            debug_log["steps"]["step1_siteone_parse"]["total_urls"] = total_urls
+            debug_log["steps"]["step1_siteone_parse"]["bp_issues"] = bp_issues
+            debug_log["steps"]["step1_siteone_parse"]["a11y_issues"] = a11y_issues
+            print(f"  SiteOne parsed: {total_urls} URLs, {bp_issues} best-practice issues, {a11y_issues} accessibility issues, {summary_issues} summary warnings")
         except FileNotFoundError:
             errors.append(f"SiteOne output not found: {siteone_path}")
             _mark_step_error(debug_log, "step1_siteone_parse", errors[-1])

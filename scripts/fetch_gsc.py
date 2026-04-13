@@ -61,7 +61,8 @@ def _resolve_site_url(service, site_url: str) -> str:
 
 
 def _get_indexed_count(service, site_url: str) -> int:
-    """Sitemap API로 색인 페이지 수 합산."""
+    """색인 페이지 수 추정: Sitemap API → Search Analytics 페이지 수 순으로 시도."""
+    # 방법 1: Sitemap API
     try:
         result = service.sitemaps().list(siteUrl=site_url).execute()
         total = 0
@@ -69,10 +70,32 @@ def _get_indexed_count(service, site_url: str) -> int:
             for content in sitemap.get("contents", []):
                 val = content.get("indexed", 0)
                 total += int(val) if val else 0
-        return total
+        if total > 0:
+            return total
+        print("  Sitemap API returned 0 indexed pages, trying Search Analytics fallback")
     except Exception as e:
-        print(f"Warning: Failed to get indexed count: {e}")
-        return 0
+        print(f"Warning: Sitemap API failed: {e}, trying Search Analytics fallback")
+
+    # 방법 2: Search Analytics에서 노출된 고유 페이지 수 (최근 28일)
+    try:
+        result = service.searchanalytics().query(
+            siteUrl=site_url,
+            body={
+                "startDate": _date_days_ago(28),
+                "endDate": _date_days_ago(1),
+                "dimensions": ["page"],
+                "rowLimit": 1000,
+            },
+        ).execute()
+        rows = result.get("rows", [])
+        if rows:
+            count = len(rows)
+            print(f"  Search Analytics fallback: {count} pages with impressions in last 28 days")
+            return count
+    except Exception as e:
+        print(f"Warning: Search Analytics fallback also failed: {e}")
+
+    return 0
 
 
 def _get_index_errors(service, site_url: str, sample_urls: list[str]) -> list[dict]:

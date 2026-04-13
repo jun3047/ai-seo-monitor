@@ -250,7 +250,7 @@ def create_weekly_report(
 
     # 평균 응답시간 계산 (SiteOne 데이터)
     slow_pages = siteone_data.get("slow_pages", [])
-    all_response_times = [p.get("response_time", 0) for p in slow_pages if p.get("response_time")]
+    all_response_times = [p.get("response_time_sec", p.get("response_time", 0)) for p in slow_pages if p.get("response_time_sec") or p.get("response_time")]
     avg_response = round(sum(all_response_times) / len(all_response_times), 2) if all_response_times else 0
 
     # 본문 블록 생성
