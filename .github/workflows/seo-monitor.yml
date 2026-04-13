@@ -1,8 +1,8 @@
-name: SEO Weekly Monitor
+name: SEO Daily Monitor
 
 on:
   schedule:
-    - cron: '0 1 * * 1'  # UTC 01:00 = KST 10:00, 매주 월요일
+    - cron: '0 23 * * *'  # UTC 23:00 = KST 08:00, 매일
   workflow_dispatch:
     inputs:
       dry_run:
