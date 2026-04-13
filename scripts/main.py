@@ -214,12 +214,14 @@ def main():
             print(f"  ERROR: {errors[-1]}")
 
     # Step 2: GSC + CrUX 데이터 수집
-    gsc_data = {"indexed_count": 0, "index_errors": [], "cwv": {}}
+    gsc_data = {"submitted_count": 0, "pages_with_impressions": 0, "index_errors": [], "cwv": {}, "search_performance": {"current": {}, "previous": {}}, "top_queries": [], "top_pages": []}
     with _step_timer("step2_gsc_crux", debug_log):
         try:
             from fetch_gsc import fetch_gsc_data
             gsc_data = fetch_gsc_data(site_url)
-            print(f"  GSC data: indexed={gsc_data.get('indexed_count', 0)}, errors={len(gsc_data.get('index_errors', []))}")
+            perf = gsc_data.get("search_performance", {}).get("current", {})
+            print(f"  GSC data: submitted={gsc_data.get('submitted_count', 0)}, pages_with_impressions={gsc_data.get('pages_with_impressions', 0)}, errors={len(gsc_data.get('index_errors', []))}")
+            print(f"  Search: clicks={perf.get('clicks', 0)}, impressions={perf.get('impressions', 0)}, ctr={perf.get('ctr', 0)}%, position={perf.get('position', 0)}")
         except Exception as e:
             errors.append(f"GSC fetch failed: {e}")
             _mark_step_error(debug_log, "step2_gsc_crux", errors[-1])

@@ -60,42 +60,124 @@ def _resolve_site_url(service, site_url: str) -> str:
     return site_url
 
 
-def _get_indexed_count(service, site_url: str) -> int:
-    """색인 페이지 수 추정: Sitemap API → Search Analytics 페이지 수 순으로 시도."""
-    # 방법 1: Sitemap API
+def _date_days_ago(days: int) -> str:
+    from datetime import date, timedelta
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Search Analytics
+# ---------------------------------------------------------------------------
+
+def _query_search_analytics(service, site_url: str, start_date: str, end_date: str, dimensions: list[str], row_limit: int = 25000) -> list[dict]:
+    """Search Analytics 쿼리 실행 헬퍼."""
+    try:
+        result = service.searchanalytics().query(
+            siteUrl=site_url,
+            body={
+                "startDate": start_date,
+                "endDate": end_date,
+                "dimensions": dimensions,
+                "rowLimit": row_limit,
+            },
+        ).execute()
+        return result.get("rows", [])
+    except Exception as e:
+        print(f"Warning: Search Analytics query failed (dims={dimensions}): {e}")
+        return []
+
+
+def _get_search_performance(service, site_url: str) -> dict:
+    """사이트 전체 검색 성과: 최근 7일 vs 이전 7일."""
+    def _aggregate(rows):
+        total_clicks = sum(r.get("clicks", 0) for r in rows)
+        total_impressions = sum(r.get("impressions", 0) for r in rows)
+        avg_ctr = round(total_clicks / total_impressions * 100, 2) if total_impressions > 0 else 0
+        # position은 노출 가중 평균
+        weighted_pos = sum(r.get("position", 0) * r.get("impressions", 0) for r in rows)
+        avg_position = round(weighted_pos / total_impressions, 1) if total_impressions > 0 else 0
+        return {
+            "clicks": total_clicks,
+            "impressions": total_impressions,
+            "ctr": avg_ctr,
+            "position": avg_position,
+        }
+
+    # GSC 데이터는 2~3일 지연 → 3일 전부터 계산
+    current_rows = _query_search_analytics(
+        service, site_url,
+        _date_days_ago(10), _date_days_ago(3),
+        dimensions=["date"],
+    )
+    previous_rows = _query_search_analytics(
+        service, site_url,
+        _date_days_ago(17), _date_days_ago(10),
+        dimensions=["date"],
+    )
+
+    return {
+        "current": _aggregate(current_rows),
+        "previous": _aggregate(previous_rows),
+    }
+
+
+def _get_top_queries(service, site_url: str, limit: int = 20) -> list[dict]:
+    """검색어별 성과 TOP N (최근 7일)."""
+    rows = _query_search_analytics(
+        service, site_url,
+        _date_days_ago(10), _date_days_ago(3),
+        dimensions=["query"],
+        row_limit=limit,
+    )
+    return [
+        {
+            "query": r["keys"][0],
+            "clicks": r.get("clicks", 0),
+            "impressions": r.get("impressions", 0),
+            "ctr": round(r.get("ctr", 0) * 100, 2),
+            "position": round(r.get("position", 0), 1),
+        }
+        for r in rows
+    ]
+
+
+def _get_top_pages(service, site_url: str, limit: int = 20) -> list[dict]:
+    """페이지별 성과 TOP N (최근 7일)."""
+    rows = _query_search_analytics(
+        service, site_url,
+        _date_days_ago(10), _date_days_ago(3),
+        dimensions=["page"],
+        row_limit=limit,
+    )
+    return [
+        {
+            "page": r["keys"][0],
+            "clicks": r.get("clicks", 0),
+            "impressions": r.get("impressions", 0),
+            "ctr": round(r.get("ctr", 0) * 100, 2),
+            "position": round(r.get("position", 0), 1),
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Sitemap / Index
+# ---------------------------------------------------------------------------
+
+def _get_submitted_count(service, site_url: str) -> int:
+    """Sitemap API로 제출된 URL 수 합산."""
     try:
         result = service.sitemaps().list(siteUrl=site_url).execute()
         total = 0
         for sitemap in result.get("sitemap", []):
             for content in sitemap.get("contents", []):
-                val = content.get("indexed", 0)
+                val = content.get("submitted", 0)
                 total += int(val) if val else 0
-        if total > 0:
-            return total
-        print("  Sitemap API returned 0 indexed pages, trying Search Analytics fallback")
+        return total
     except Exception as e:
-        print(f"Warning: Sitemap API failed: {e}, trying Search Analytics fallback")
-
-    # 방법 2: Search Analytics에서 노출된 고유 페이지 수 (최근 28일)
-    try:
-        result = service.searchanalytics().query(
-            siteUrl=site_url,
-            body={
-                "startDate": _date_days_ago(28),
-                "endDate": _date_days_ago(1),
-                "dimensions": ["page"],
-                "rowLimit": 1000,
-            },
-        ).execute()
-        rows = result.get("rows", [])
-        if rows:
-            count = len(rows)
-            print(f"  Search Analytics fallback: {count} pages with impressions in last 28 days")
-            return count
-    except Exception as e:
-        print(f"Warning: Search Analytics fallback also failed: {e}")
-
-    return 0
+        print(f"Warning: Failed to get submitted count: {e}")
+        return 0
 
 
 def _get_index_errors(service, site_url: str, sample_urls: list[str]) -> list[dict]:
@@ -120,27 +202,12 @@ def _get_index_errors(service, site_url: str, sample_urls: list[str]) -> list[di
     return errors
 
 
-def _get_search_urls(service, site_url: str) -> list[str]:
-    """Search Analytics로 검색 노출 URL 목록 수집."""
-    try:
-        result = service.searchanalytics().query(
-            siteUrl=site_url,
-            body={
-                "startDate": _date_days_ago(7),
-                "endDate": _date_days_ago(1),
-                "dimensions": ["page"],
-                "rowLimit": 100,
-            },
-        ).execute()
-        return [row["keys"][0] for row in result.get("rows", [])]
-    except Exception as e:
-        print(f"Warning: Failed to get search URLs: {e}")
-        return []
-
+# ---------------------------------------------------------------------------
+# CrUX (Core Web Vitals)
+# ---------------------------------------------------------------------------
 
 def _get_cwv_data(site_url: str) -> dict:
     """CrUX API로 Core Web Vitals 데이터 수집 (API 키 방식)."""
-    # CrUX는 전체 origin URL 필요 (scheme 포함)
     origin = site_url.rstrip("/")
     if not origin.startswith("http"):
         origin = f"https://{origin}"
@@ -197,10 +264,9 @@ def _empty_cwv() -> dict:
     return {"lcp": dict(empty), "inp": dict(empty), "cls": dict(empty)}
 
 
-def _date_days_ago(days: int) -> str:
-    from datetime import date, timedelta
-    return (date.today() - timedelta(days=days)).isoformat()
-
+# ---------------------------------------------------------------------------
+# 통합 수집
+# ---------------------------------------------------------------------------
 
 def fetch_gsc_data(site_url: str) -> dict:
     """GSC + CrUX 데이터 통합 수집."""
@@ -210,15 +276,40 @@ def fetch_gsc_data(site_url: str) -> dict:
     gsc_site_url = _resolve_site_url(service, site_url)
     print(f"  GSC site URL resolved: {gsc_site_url}")
 
-    indexed_count = _get_indexed_count(service, gsc_site_url)
-    search_urls = _get_search_urls(service, gsc_site_url)
+    # Search Analytics
+    print("  Fetching search performance...")
+    search_performance = _get_search_performance(service, gsc_site_url)
+    print(f"  Search performance: {search_performance['current']['clicks']} clicks, {search_performance['current']['impressions']} impressions")
+
+    print("  Fetching top queries...")
+    top_queries = _get_top_queries(service, gsc_site_url)
+    print(f"  Top queries: {len(top_queries)} queries")
+
+    print("  Fetching top pages...")
+    top_pages = _get_top_pages(service, gsc_site_url)
+    print(f"  Top pages: {len(top_pages)} pages")
+
+    pages_with_impressions = len(top_pages)
+
+    # Sitemap
+    submitted_count = _get_submitted_count(service, gsc_site_url)
+    print(f"  Sitemap submitted: {submitted_count} URLs")
+
+    # URL Inspection (검색 노출 URL 대상)
+    search_urls = [p["page"] for p in top_pages]
     index_errors = _get_index_errors(service, gsc_site_url, search_urls)
+
+    # CrUX
     cwv = _get_cwv_data(site_url)
 
     return {
-        "indexed_count": indexed_count,
+        "submitted_count": submitted_count,
+        "pages_with_impressions": pages_with_impressions,
         "index_errors": index_errors,
         "cwv": cwv,
+        "search_performance": search_performance,
+        "top_queries": top_queries,
+        "top_pages": top_pages,
     }
 
 

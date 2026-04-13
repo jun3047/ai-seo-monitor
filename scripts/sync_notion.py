@@ -171,8 +171,33 @@ def _build_report_body(analysis: dict, gsc_data: dict, siteone_data: dict) -> li
     blocks.append(_bulleted(f"LCP Good: {lcp.get('good_pct', 'N/A')}% | NI: {lcp.get('needs_improvement_pct', 'N/A')}% | Poor: {lcp.get('poor_pct', 'N/A')}%"))
     blocks.append(_bulleted(f"INP Good: {inp.get('good_pct', 'N/A')}% | NI: {inp.get('needs_improvement_pct', 'N/A')}% | Poor: {inp.get('poor_pct', 'N/A')}%"))
     blocks.append(_bulleted(f"CLS Good: {cls_.get('good_pct', 'N/A')}% | NI: {cls_.get('needs_improvement_pct', 'N/A')}% | Poor: {cls_.get('poor_pct', 'N/A')}%"))
-    blocks.append(_bulleted(f"색인 수: {gsc_data.get('indexed_count', 0)} | 색인 오류: {len(gsc_data.get('index_errors', []))}"))
+    blocks.append(_bulleted(f"사이트맵 제출: {gsc_data.get('submitted_count', 0)} | 검색 노출 페이지: {gsc_data.get('pages_with_impressions', 0)} | 색인 오류: {len(gsc_data.get('index_errors', []))}"))
     blocks.append(_divider())
+
+    # 2.5. 검색 성과
+    perf = gsc_data.get("search_performance", {})
+    current = perf.get("current", {})
+    previous = perf.get("previous", {})
+    if current:
+        blocks.append(_heading2("🔍 검색 성과 (최근 7일)"))
+        blocks.append(_bulleted(f"클릭: {current.get('clicks', 0)} (전주 {previous.get('clicks', 'N/A')})"))
+        blocks.append(_bulleted(f"노출: {current.get('impressions', 0)} (전주 {previous.get('impressions', 'N/A')})"))
+        blocks.append(_bulleted(f"CTR: {current.get('ctr', 0)}% (전주 {previous.get('ctr', 'N/A')}%)"))
+        blocks.append(_bulleted(f"평균 순위: {current.get('position', 0)} (전주 {previous.get('position', 'N/A')})"))
+
+        top_queries = gsc_data.get("top_queries", [])[:10]
+        if top_queries:
+            blocks.append(_heading3("TOP 검색어"))
+            for i, q in enumerate(top_queries):
+                blocks.append(_bulleted(f"{i+1}. \"{q['query']}\" — 클릭 {q['clicks']}, 노출 {q['impressions']}, 순위 {q['position']}"))
+
+        top_pages = gsc_data.get("top_pages", [])[:10]
+        if top_pages:
+            blocks.append(_heading3("TOP 페이지"))
+            for i, p in enumerate(top_pages):
+                blocks.append(_bulleted(f"{i+1}. {p['page']} — 클릭 {p['clicks']}, 노출 {p['impressions']}, 순위 {p['position']}"))
+
+        blocks.append(_divider())
 
     # 3. 지표 코멘트
     metric_comments = analysis.get("metric_comments", [])
@@ -269,8 +294,13 @@ def create_weekly_report(
             "LCP Good %": {"number": cwv.get("lcp", {}).get("good_pct")},
             "INP Good %": {"number": cwv.get("inp", {}).get("good_pct")},
             "CLS Good %": {"number": cwv.get("cls", {}).get("good_pct")},
-            "색인 수": {"number": gsc_data.get("indexed_count", 0)},
+            "사이트맵 제출 수": {"number": gsc_data.get("submitted_count", 0)},
+            "검색 노출 페이지": {"number": gsc_data.get("pages_with_impressions", 0)},
             "색인 오류 수": {"number": len(gsc_data.get("index_errors", []))},
+            "총 클릭": {"number": gsc_data.get("search_performance", {}).get("current", {}).get("clicks", 0)},
+            "총 노출": {"number": gsc_data.get("search_performance", {}).get("current", {}).get("impressions", 0)},
+            "평균 CTR": {"number": gsc_data.get("search_performance", {}).get("current", {}).get("ctr", 0)},
+            "평균 순위": {"number": gsc_data.get("search_performance", {}).get("current", {}).get("position", 0)},
             "평균 응답시간": {"number": avg_response},
             "Notion 이슈 링크": {"url": f"https://www.notion.so/{report_db_id.replace('-', '')}"},
         },

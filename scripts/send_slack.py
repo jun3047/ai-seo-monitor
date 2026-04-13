@@ -10,13 +10,22 @@ from slack_sdk import WebClient
 MAX_MESSAGE_LENGTH = 35000
 
 
-def _format_diff(current, previous, unit="") -> str:
+def _format_diff(current, previous, unit="", decimals=0) -> str:
     """전주 대비 변화량 포매팅."""
-    if previous is None or previous == "N/A":
+    if previous is None or previous == "N/A" or previous == 0 and current == 0:
         return ""
     diff = current - previous
     sign = "+" if diff > 0 else ""
+    if decimals > 0:
+        return f" ({sign}{diff:.{decimals}f}{unit})"
     return f" ({sign}{diff}{unit})"
+
+
+def _format_number(n) -> str:
+    """숫자 천 단위 콤마 포맷."""
+    if isinstance(n, float):
+        return f"{n:,.1f}"
+    return f"{n:,}"
 
 
 def _build_detail_message(
@@ -32,17 +41,19 @@ def _build_detail_message(
     cwv = gsc_data.get("cwv", {})
     prev = prev_metrics or {}
 
-    indexed = gsc_data.get("indexed_count", 0)
     index_errors = len(gsc_data.get("index_errors", []))
-    indexed_prev = prev.get("indexed_count")
     errors_prev = prev.get("index_error_count")
 
     lcp_good = cwv.get("lcp", {}).get("good_pct")
     inp_good = cwv.get("inp", {}).get("good_pct")
     cls_good = cwv.get("cls", {}).get("good_pct")
 
-    indexed_diff = _format_diff(indexed, indexed_prev)
     errors_diff = _format_diff(index_errors, errors_prev, "건")
+
+    # Search Analytics
+    perf = gsc_data.get("search_performance", {})
+    current = perf.get("current", {})
+    previous = perf.get("previous", {})
 
     week_of_month = math.ceil(today.day / 7)
 
@@ -60,14 +71,49 @@ def _build_detail_message(
     lines.append(f"- {analysis.get('summary', '요약 없음')}")
     lines.append("")
 
+    # 검색 성과
+    lines.append("> *검색 성과 (최근 7일)*")
+    clicks = current.get("clicks", 0)
+    impressions = current.get("impressions", 0)
+    ctr = current.get("ctr", 0)
+    position = current.get("position", 0)
+    clicks_diff = _format_diff(clicks, previous.get("clicks"))
+    impressions_diff = _format_diff(impressions, previous.get("impressions"))
+    ctr_diff = _format_diff(ctr, previous.get("ctr"), "%p", decimals=1)
+    position_diff = _format_diff(position, previous.get("position"), "", decimals=1)
+    lines.append(f"- 클릭: {_format_number(clicks)}{clicks_diff}")
+    lines.append(f"- 노출: {_format_number(impressions)}{impressions_diff}")
+    lines.append(f"- CTR: {ctr}%{ctr_diff}")
+    lines.append(f"- 평균 순위: {position}{position_diff}")
+    lines.append("")
+
+    # TOP 검색어
+    top_queries = gsc_data.get("top_queries", [])[:5]
+    if top_queries:
+        lines.append("> *TOP 검색어*")
+        for i, q in enumerate(top_queries):
+            lines.append(f"- {i+1}. \"{q['query']}\" — {q['clicks']}클릭, 순위 {q['position']}")
+        lines.append("")
+
+    # TOP 페이지
+    top_pages = gsc_data.get("top_pages", [])[:5]
+    if top_pages:
+        lines.append("> *TOP 페이지*")
+        for i, p in enumerate(top_pages):
+            # URL에서 경로만 추출
+            page_path = p["page"].split("//", 1)[-1].split("/", 1)[-1] if "//" in p["page"] else p["page"]
+            lines.append(f"- {i+1}. /{page_path} — {p['clicks']}클릭, 순위 {p['position']}")
+        lines.append("")
+
     # 주요 지표
-    lines.append("> *주요 지표*")
-    lines.append(f"- 색인: {indexed}개{indexed_diff}")
+    lines.append("> *사이트맵 & 색인*")
+    lines.append(f"- 사이트맵 제출: {gsc_data.get('submitted_count', 0)}개")
+    lines.append(f"- 검색 노출 페이지: {gsc_data.get('pages_with_impressions', 0)}개")
     lines.append(f"- 색인 오류: {index_errors}건{errors_diff}")
     index_error_list = gsc_data.get("index_errors", [])
     for err in index_error_list:
         if isinstance(err, dict):
-            lines.append(f"  - {err.get('url', '')} ({err.get('verdict', '')})")
+            lines.append(f"  - {err.get('url', '')} ({err.get('type', '')})")
         else:
             lines.append(f"  - {err}")
     lines.append("")
